@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { fmtCur, fmtBig } from "@/lib/data";
 import { ictEdge } from "@/lib/ict";
@@ -112,7 +112,36 @@ function ModalBody({ asset, onClose }) {
     winProb: edge.prob,
   });
   const bl = q.barLabel;
-  const plan = tradePlan(asset, { edge, q, lv, ruin, nu });
+
+  // --- Setup latching ---------------------------------------------------
+  // Recomputing the plan on every ~8s price poll makes the entry levels and
+  // the verdict flicker. A real trade setup should hold still once it is on
+  // the table, so we LATCH it per asset and only refresh when:
+  //   - a different asset is opened,
+  //   - the latched setup is invalidated (price trades beyond the stop) or its
+  //     final target is reached (the idea has played out), or
+  //   - a fresh full-confluence ("go") entry appears where there wasn't one.
+  // Otherwise the previously shown plan and its levels are held steady so the
+  // setup does not change on every refresh.
+  const freshPlan = tradePlan(asset, { edge, q, lv, ruin, nu });
+  const latch = useRef(null);
+  const prev = latch.current;
+  let plan;
+  if (!prev || prev.sym !== asset.symbol) {
+    plan = freshPlan;
+  } else {
+    const pr = asset.price;
+    const invalidated = prev.plan.isLong
+      ? pr < prev.plan.invalidation
+      : pr > prev.plan.invalidation;
+    const targetDone = prev.plan.isLong
+      ? pr >= prev.plan.t2
+      : pr <= prev.plan.t2;
+    const upgradeToEntry = freshPlan.tone === "go" && prev.plan.tone !== "go";
+    plan = invalidated || targetDone || upgradeToEntry ? freshPlan : prev.plan;
+  }
+  latch.current = { sym: asset.symbol, plan };
+
   const tone = TONE[plan.tone] || TONE.wait;
   const decStyle = { borderColor: tone.c };
   const tagStyle = { background: tone.c };
